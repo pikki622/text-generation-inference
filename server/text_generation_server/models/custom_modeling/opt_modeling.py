@@ -815,20 +815,15 @@ class OPTForCausalLM(OPTPreTrainedModel):
         if past_key_values:
             input_ids = input_ids[:, -1:]
 
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-        if inputs_embeds is not None and past_key_values is None:
-            model_inputs = {"inputs_embeds": inputs_embeds}
-        else:
-            model_inputs = {"input_ids": input_ids}
-
-        model_inputs.update(
-            {
-                "past_key_values": past_key_values,
-                "use_cache": kwargs.get("use_cache"),
-                "attention_mask": attention_mask,
-            }
-        )
-        return model_inputs
+        return (
+            {"inputs_embeds": inputs_embeds}
+            if inputs_embeds is not None and past_key_values is None
+            else {"input_ids": input_ids}
+        ) | {
+            "past_key_values": past_key_values,
+            "use_cache": kwargs.get("use_cache"),
+            "attention_mask": attention_mask,
+        }
 
     @staticmethod
     def _reorder_cache(past_key_values, beam_idx):

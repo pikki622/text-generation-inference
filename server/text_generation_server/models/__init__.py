@@ -60,10 +60,9 @@ except ImportError as e:
     FLASH_ATTENTION = False
 
 if FLASH_ATTENTION:
-    __all__.append(FlashNeoXSharded)
-    __all__.append(FlashRWSharded)
-    __all__.append(FlashSantacoderSharded)
-    __all__.append(FlashLlama)
+    __all__.extend(
+        (FlashNeoXSharded, FlashRWSharded, FlashSantacoderSharded, FlashLlama)
+    )
 
 
 def get_model(
@@ -74,9 +73,7 @@ def get_model(
     dtype: Optional[str],
     trust_remote_code: bool,
 ) -> Model:
-    if dtype is None:
-        dtype = torch.float16
-    elif dtype == "float16":
+    if dtype is None or dtype == "float16":
         dtype = torch.float16
     elif dtype == "bfloat16":
         dtype = torch.bfloat16
@@ -92,8 +89,8 @@ def get_model(
             trust_remote_code=trust_remote_code,
         )
 
-    if model_id.startswith("bigcode/"):
-        if FLASH_ATTENTION:
+    if FLASH_ATTENTION:
+        if model_id.startswith("bigcode/"):
             return FlashSantacoderSharded(
                 model_id,
                 revision,
@@ -101,45 +98,24 @@ def get_model(
                 dtype=dtype,
                 trust_remote_code=trust_remote_code,
             )
-        elif sharded:
+    elif sharded:
+        if model_id.startswith("bigcode/"):
             raise NotImplementedError(
                 FLASH_ATT_ERROR_MESSAGE.format("Sharded Santacoder")
             )
-        else:
-            return SantaCoder(
-                model_id,
-                revision,
-                quantize=quantize,
-                dtype=dtype,
-                trust_remote_code=trust_remote_code,
-            )
+    elif model_id.startswith("bigcode/"):
+        return SantaCoder(
+            model_id,
+            revision,
+            quantize=quantize,
+            dtype=dtype,
+            trust_remote_code=trust_remote_code,
+        )
 
     config_dict, _ = PretrainedConfig.get_config_dict(
         model_id, revision=revision, trust_remote_code=trust_remote_code
     )
     model_type = config_dict["model_type"]
-
-    if model_type == "gpt_bigcode":
-        if FLASH_ATTENTION:
-            return FlashSantacoderSharded(
-                model_id,
-                revision,
-                quantize=quantize,
-                dtype=dtype,
-                trust_remote_code=trust_remote_code,
-            )
-        elif sharded:
-            raise NotImplementedError(
-                FLASH_ATT_ERROR_MESSAGE.format("Sharded Santacoder")
-            )
-        else:
-            return SantaCoder(
-                model_id,
-                revision,
-                quantize=quantize,
-                dtype=dtype,
-                trust_remote_code=trust_remote_code,
-            )
 
     if model_type == "bloom":
         return BLOOMSharded(
@@ -149,10 +125,27 @@ def get_model(
             dtype=dtype,
             trust_remote_code=trust_remote_code,
         )
-    elif model_type == "mpt":
-        return MPTSharded(
-            model_id, revision, quantize=quantize, trust_remote_code=trust_remote_code
-        )
+    elif model_type == "gpt_bigcode":
+        if FLASH_ATTENTION:
+            return FlashSantacoderSharded(
+                model_id,
+                revision,
+                quantize=quantize,
+                dtype=dtype,
+                trust_remote_code=trust_remote_code,
+            )
+        elif sharded:
+            raise NotImplementedError(
+                FLASH_ATT_ERROR_MESSAGE.format("Sharded Santacoder")
+            )
+        else:
+            return SantaCoder(
+                model_id,
+                revision,
+                quantize=quantize,
+                dtype=dtype,
+                trust_remote_code=trust_remote_code,
+            )
 
     elif model_type == "gpt_neox":
         if FLASH_ATTENTION:
@@ -200,37 +193,41 @@ def get_model(
                 trust_remote_code=trust_remote_code,
             )
 
-    if model_type in ["RefinedWeb", "RefinedWebModel", "falcon"]:
-        if sharded:
-            if FLASH_ATTENTION:
-                if config_dict.get("alibi", False):
-                    raise NotImplementedError("sharded is not supported for this model")
-                return FlashRWSharded(
-                    model_id,
-                    revision,
-                    quantize=quantize,
-                    dtype=dtype,
-                    trust_remote_code=trust_remote_code,
-                )
-            raise NotImplementedError(FLASH_ATT_ERROR_MESSAGE.format(f"Sharded Falcon"))
-        else:
-            if FLASH_ATTENTION and not config_dict.get("alibi", False):
-                return FlashRWSharded(
-                    model_id,
-                    revision,
-                    quantize=quantize,
-                    dtype=dtype,
-                    trust_remote_code=trust_remote_code,
-                )
-            else:
-                return RW(
-                    model_id,
-                    revision,
-                    quantize=quantize,
-                    dtype=dtype,
-                    trust_remote_code=trust_remote_code,
-                )
+    elif model_type == "mpt":
+        return MPTSharded(
+            model_id, revision, quantize=quantize, trust_remote_code=trust_remote_code
+        )
 
+    if model_type in ["RefinedWeb", "RefinedWebModel", "falcon"]:
+        if not sharded:
+            return (
+                FlashRWSharded(
+                    model_id,
+                    revision,
+                    quantize=quantize,
+                    dtype=dtype,
+                    trust_remote_code=trust_remote_code,
+                )
+                if FLASH_ATTENTION and not config_dict.get("alibi", False)
+                else RW(
+                    model_id,
+                    revision,
+                    quantize=quantize,
+                    dtype=dtype,
+                    trust_remote_code=trust_remote_code,
+                )
+            )
+        if FLASH_ATTENTION:
+            if config_dict.get("alibi", False):
+                raise NotImplementedError("sharded is not supported for this model")
+            return FlashRWSharded(
+                model_id,
+                revision,
+                quantize=quantize,
+                dtype=dtype,
+                trust_remote_code=trust_remote_code,
+            )
+        raise NotImplementedError(FLASH_ATT_ERROR_MESSAGE.format("Sharded Falcon"))
     elif model_type == "opt":
         return OPTSharded(
             model_id,
@@ -255,7 +252,7 @@ def get_model(
         raise ValueError(
             "gptq quantization is not supported for AutoModel, you can try to quantize it with `text-generation-server quantize ORIGINAL_MODEL_ID NEW_MODEL_ID`"
         )
-    elif (quantize == "bitsandbytes-fp4") or (quantize == "bitsandbytes-nf4"):
+    elif quantize in ["bitsandbytes-fp4", "bitsandbytes-nf4"]:
         raise ValueError(
             "4bit quantization is not supported for AutoModel"
         )

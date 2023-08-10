@@ -27,13 +27,13 @@ def download_and_unload_peft(model_id, revision, trust_remote_code):
             trust_remote_code=trust_remote_code,
             low_cpu_mem_usage=True,
         )
-    logger.info(f"Loaded.")
-    logger.info(f"Merging the lora weights.")
+    logger.info("Loaded.")
+    logger.info("Merging the lora weights.")
 
     base_model_id = model.peft_config["default"].base_model_name_or_path
 
     model = model.merge_and_unload()
-    
+
     os.makedirs(model_id, exist_ok=True)
     cache_dir = model_id
     logger.info(f"Saving the newly created merged model to {cache_dir}")

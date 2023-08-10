@@ -14,6 +14,7 @@
 # limitations under the License.
 """PyTorch BLOOM model."""
 
+
 import math
 import os
 import warnings
@@ -40,7 +41,7 @@ from text_generation_server.utils.layers import (
 )
 
 CUSTOM_KERNELS_ENABLED = False
-if not os.environ.get("DISABLE_CUSTOM_KERNELS", "False") == "True":
+if os.environ.get("DISABLE_CUSTOM_KERNELS", "False") != "True":
     try:
         from custom_kernels import fused_bloom_attention_cuda
 
@@ -76,10 +77,9 @@ def _make_causal_mask(
     )
     mask = mask.triu(1 + past_key_values_length)
 
-    expanded_mask = mask.unsqueeze(0).expand(
+    return mask.unsqueeze(0).expand(
         batch_size, target_length, target_length + past_key_values_length
     )
-    return expanded_mask
 
 
 def _expand_mask(mask: torch.Tensor, tgt_length: int) -> torch.BoolTensor:
@@ -145,8 +145,7 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int) -> torch.Te
     # This is more or less identical to T5's relative position bias:
     # https://github.com/huggingface/transformers/blob/f681437203baa7671de3174b0fa583c349d9d5e1/src/transformers/models/t5/modeling_t5.py#L527
     arange_tensor = ((attention_mask.cumsum(dim=-1) - 1) * attention_mask)[:, None, :]
-    alibi = slopes[..., None] * arange_tensor
-    return alibi
+    return slopes[..., None] * arange_tensor
 
 
 # @torch.jit.script
@@ -307,10 +306,7 @@ class BloomAttention(nn.Module):
 
         _, _, kv_length = key_layer.shape
 
-        if use_cache is True:
-            present = (key_layer, value_layer)
-        else:
-            present = None
+        present = (key_layer, value_layer) if use_cache else None
         ###
 
         # [batch_size * num_heads, q_length, kv_length]
@@ -542,12 +538,7 @@ class BloomBlock(nn.Module):
         # MLP.
         output = self.mlp(layernorm_output, residual)
 
-        if use_cache:
-            outputs = (output,) + outputs
-        else:
-            outputs = (output,) + outputs[1:]
-
-        return outputs  # hidden_states, present, attentions
+        return (output,) + outputs if use_cache else (output,) + outputs[1:]
 
 
 class BloomPreTrainedModel(PreTrainedModel):
@@ -681,7 +672,7 @@ class BloomModel(BloomPreTrainedModel):
                 " passing `position_ids`.",
                 FutureWarning,
             )
-        if len(deprecated_arguments) > 0:
+        if deprecated_arguments:
             raise ValueError(f"Got unexpected arguments: {deprecated_arguments}")
 
         output_attentions = (
@@ -839,20 +830,15 @@ class BloomForCausalLM(BloomPreTrainedModel):
             if past_key_values[0][0].shape[0] == input_ids.shape[0]:
                 past_key_values = self._convert_to_bloom_cache(past_key_values)
 
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-        if inputs_embeds is not None and past_key_values is None:
-            model_inputs = {"inputs_embeds": inputs_embeds}
-        else:
-            model_inputs = {"input_ids": input_ids}
-
-        model_inputs.update(
-            {
-                "past_key_values": past_key_values,
-                "use_cache": kwargs.get("use_cache"),
-                "attention_mask": attention_mask,
-            }
-        )
-        return model_inputs
+        return (
+            {"inputs_embeds": inputs_embeds}
+            if inputs_embeds is not None and past_key_values is None
+            else {"input_ids": input_ids}
+        ) | {
+            "past_key_values": past_key_values,
+            "use_cache": kwargs.get("use_cache"),
+            "attention_mask": attention_mask,
+        }
 
     def forward(
         self,
@@ -881,7 +867,7 @@ class BloomForCausalLM(BloomPreTrainedModel):
                 " passing `position_ids`.",
                 FutureWarning,
             )
-        if len(deprecated_arguments) > 0:
+        if deprecated_arguments:
             raise ValueError(f"Got unexpected arguments: {deprecated_arguments}")
 
         return_dict = (
